@@ -24,6 +24,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import argparse
 import yaml
 import json
+import jsonify
 import ast
 from os import environ as env
 from os import rename, path
@@ -73,13 +74,16 @@ def maybe_get_cacert():
 
 
 def get_clients():
+    
     ks_version = int(env.get('OS_IDENTITY_API_VERSION', 2))
+    
     if ks_version == 2:
         from keystoneclient.v2_0 import client as keystone_client
         # Legacy v2 env vars:
         # OS_USERNAME OS_PASSWORD OS_TENANT_NAME OS_AUTH_URL OS_REGION_NAME
         ks_creds = get_creds_dict("username", "password", "tenant_name",
                                   "auth_url", "region_name")
+        
         cacert = maybe_get_cacert()
         if cacert:
             ks_creds["cacert"] = cacert
@@ -93,6 +97,7 @@ def get_clients():
         cinder = cinder_client.Client(*cinder_creds, cacert=cacert)
 
     elif ks_version == 3:
+        
         from keystoneauth1.identity import v3
         from keystoneauth1 import session
         from keystoneclient.v3 import client
@@ -107,25 +112,31 @@ def get_clients():
             "username", "password", "user_domain_name", "auth_url",
             "project_domain_name", "project_name", "project_domain_id", "project_id")
         # Need non-domain creds to get full catalog
+        
         ks_creds_admin = get_creds_dict(
             "username", "password", "user_domain_name", "auth_url",
             "project_domain_name", "project_name", "project_domain_id", "project_id")
+
+
         auth_domain = v3.Password(**ks_creds_domain)
         auth_admin = v3.Password(**ks_creds_admin)
+        
         # Need to pass in cacert separately
         verify = maybe_get_cacert()
+        
         if verify is None:
             verify = True
         sess_domain = session.Session(auth=auth_domain, verify=verify)
         sess_admin = session.Session(auth=auth_admin, verify=verify)
-
+    
         interface = env.get('OS_INTERFACE', 'admin')
-
         # Keystone has not switched from interface to endpoint_type yet
         keystone = client.Client(session=sess_domain, interface=interface)
         nova = nova_client.Client(2, session=sess_admin, endpoint_type=interface)
         neutron = neutron_client.Client(session=sess_admin, endpoint_type=interface)
         cinder = cinder_client.Client(session=sess_admin, endpoint_type=interface)
+        
+         
 
     else:
         raise(ValueError("Invalid OS_IDENTITY_API_VERSION=%s" % ks_version))
@@ -146,6 +157,7 @@ class DataGatherer(Thread):
         self.cache_file = config['cache_file']
         self.use_nova_volumes = config.get('use_nova_volumes', True)
 
+
     def _get_keystone_info(self, keystone):
         info = {}
         try:
@@ -158,6 +170,8 @@ class DataGatherer(Thread):
 
     def _get_neutron_info(self, neutron):
         info = {}
+        
+        
         info['floatingips'] = neutron.list_floatingips()['floatingips']
         info['networks'] = neutron.list_networks()['networks']
         info['ports'] = neutron.list_ports()['ports']
@@ -207,12 +221,12 @@ class DataGatherer(Thread):
             start_time = time()
             try:
                 keystone, nova, neutron, cinder = get_clients()
-
                 prodstack.update(self._get_keystone_info(keystone))
                 prodstack.update(self._get_neutron_info(neutron))
                 prodstack.update(self._get_nova_info(nova, cinder, prodstack))
 
             except Exception:
+                
                 # Ignore failures, we will try again after refresh_interval.
                 # Most of them are termporary ie. connectivity problmes
                 # To alert on stale cache use openstack_exporter_cache_age_seconds metric
@@ -245,7 +259,7 @@ class Neutron():
     def __init__(self):
         self.registry = CollectorRegistry()
         self.prodstack = {}
-        with open(config['cache_file'], 'rb') as f:
+        with open(config['cache_file'], 'rb+') as f:
             self.prodstack = pickle.load(f)[0]
 
         self.tenant_map = {t['id']: t['name'] for t in self.prodstack['tenants']}
@@ -257,6 +271,7 @@ class Neutron():
         self.floating_ips = self.prodstack['floatingips']
 
     def _get_router_ip(self, uuid):
+        print("get_route_ip")
         owner = "network:router_gateway"
         for port in self.ports:
             if port["device_id"] == uuid and port["device_owner"] == owner:
@@ -330,7 +345,7 @@ class Cinder():
     def __init__(self):
         self.registry = CollectorRegistry()
         self.prodstack = {}
-        with open(config['cache_file'], 'rb') as f:
+        with open(config['cache_file'], 'rb+') as f:
             self.prodstack = pickle.load(f)[0]
         self.tenant_map = {t['id']: t['name'] for t in self.prodstack['tenants']}
         self.use_nova_volumes = config.get('use_nova_volumes', True)
@@ -362,7 +377,7 @@ class Nova():
     def __init__(self):
         self.registry = CollectorRegistry()
         self.prodstack = {}
-        with open(config['cache_file'], 'rb') as f:
+        with open(config['cache_file'], 'rb+') as f:
             self.prodstack = pickle.load(f)[0]
         self.hypervisors = self.prodstack['hypervisors']
         self.tenant_map = {t['id']: t['name'] for t in self.prodstack['tenants']}
@@ -648,16 +663,15 @@ class SwiftAccountUsage():
         self.hash_path_suffix = config.get('hash_path_suffix', None)
         if self.hash_path_suffix:
             swift.common.utils.HASH_PATH_SUFFIX = self.hash_path_suffix
-
         self.reseller_prefix = config.get('reseller_prefix', 'AUTH_')
         self.ring_path = config.get('ring_path', '/etc/swift')
 
         try:
             self.account_ring = self._get_account_ring()
-        except SystemExit:
+        except Exception as e:
             # Most likely raised by swift.common.utils.validate_configuration().
             raise Exception(
-                "Is swift.conf readable or at least one hash path variable configured?")
+                "Is swift.conf readable or at least one hash path variable configured? please check configuration Swift or comment enabled_collectors: #SwiftAccountUsage,#swift  in prometheus-openstack-exporter.yaml")
 
     def _read_keystone_tenants_map(self, map_path):
         if not map_path:
@@ -679,6 +693,7 @@ class SwiftAccountUsage():
             serialized_path=self.ring_path,
             ring_name='account',
             )
+
 
     def _get_account_usage(self, account):
         partition, nodes = self.account_ring.get_nodes(account=account)
@@ -716,6 +731,7 @@ class ForkingHTTPServer(ForkingMixIn, HTTPServer):
 
 
 # This could perhaps be cleverer, but surely not simpler.
+
 COLLECTORS = {
     'cinder': Cinder,
     'neutron': Neutron,
@@ -741,6 +757,7 @@ def get_collectors(collectors):
 
 
 def data_gatherer_needed(config):
+    
     return set(get_collectors(config.get('enabled_collectors'))).intersection(DATA_GATHERER_USERS)
 
 
@@ -752,7 +769,9 @@ class OpenstackExporterHandler(BaseHTTPRequestHandler):
         url = urlparse.urlparse(self.path)
         if url.path == '/metrics':
             try:
-                collectors = [COLLECTORS[collector]() for collector in get_collectors(config.get('enabled_collectors'))]
+                for collector in get_collectors(config.get('enabled_collectors')):
+                    collectors= [COLLECTORS[collector]()]
+                #collectors = [COLLECTORS[collector]() for collector in get_collectors(config.get('enabled_collectors'))]
                 log.debug("Collecting stats..")
                 output = ''
                 for collector in collectors:
@@ -764,7 +783,7 @@ class OpenstackExporterHandler(BaseHTTPRequestHandler):
                 self.send_header('Content-Type', CONTENT_TYPE_LATEST)
                 self.end_headers()
                 self.wfile.write(output)
-            except Exception:
+            except Exception as e:
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(traceback.format_exc())
@@ -812,5 +831,6 @@ if __name__ == '__main__':
     if data_gatherer_needed(config):
         data_gatherer = DataGatherer()
         data_gatherer.start()
+    
     server = ForkingHTTPServer(('', config.get('listen_port')), handler)
     server.serve_forever()

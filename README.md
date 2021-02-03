@@ -12,7 +12,7 @@ Data can be visualised using [Grafana](https://grafana.com/) and the [OpenStack 
 sudo apt-get install python-neutronclient python-novaclient python-keystoneclient python-netaddr python-cinderclient
 ```
 
-Install prometheus_client. On Ubuntu 16.04:
+Install prometheus_client. On Ubuntu 16.04 and 18.04:
 ```
 apt-get install python-prometheus-client
 ```
@@ -21,6 +21,45 @@ On Ubuntu 14.04:
 ```
 pip install prometheus_client
 ```
+# systemctl 
+```
+mkdir -p  /var/cache/prometheus-openstack-exporter/mycloud
+chown openstack_exporter:openstack_exporter /var/cache/prometheus-openstack-exporter/mycloud
+cp prometheus-openstack-exporter.yaml /etc/prometheus/prometheus-openstack-exporter.yaml
+## create novarc ussuri
+sudo cat <<EOF > /etc/prometheus/admin.novarc
+# COMMON CINDER ENVS
+export CINDER_ENDPOINT_TYPE=internalURL
+# COMMON NOVA ENVS
+export NOVA_ENDPOINT_TYPE=internalURL
+# COMMON MANILA ENVS
+export OS_MANILA_ENDPOINT_TYPE=internalURL
+# COMMON OPENSTACK ENVS
+export OS_ENDPOINT_TYPE=internalURL
+export OS_INTERFACE=internalURL
+export OS_USERNAME=admin
+export OS_PASSWORD='password'
+export OS_PROJECT_NAME=admin
+export OS_TENANT_NAME=admin
+export OS_AUTH_TYPE=password
+export OS_AUTH_URL=http://ip:5000/v3
+export OS_NO_CACHE=1
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_DOMAIN_NAME=Default
+export OS_REGION_NAME=RegionOne
+# For openstackclient
+export OS_IDENTITY_API_VERSION=3
+export OS_AUTH_VERSION=3
+EOF
+
+## run novarc
+source /etc/prometheus/admin.novarc
+./prometheus-openstack-exporter.sh
+
+http://localhost:9183/metrics
+
+```
+
 
 ## Installation
 
